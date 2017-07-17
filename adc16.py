@@ -2,7 +2,7 @@ from frequencysynthesizer import *
 from adc import *
 from clockswitch import *
 from wishbonedevice import WishBoneDevice
-import logging
+import logging,random
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
@@ -76,7 +76,7 @@ class SNAPADC(object):
 		# 	self.adc = HMCAD1520(interface,'adc16_controller')
 
 
-	def init(self, samplingRate=500, numChannel=4): 
+	def init(self, samplingRate=250, numChannel=4): 
 
 		self.selectADC()
 
@@ -87,7 +87,7 @@ class SNAPADC(object):
 		self.lmx.init()
 
 		logging.info("Configuring frequency synthesizer")
-		self.lmx.setFreq(samplingRate)
+		self.lmx.setFreq(1.0 * samplingRate / (4 / numChannel))
 
 		if not self.lmx.getDiagnoses('LD_PINSTATE'):
 			return self.ERROR_LMX
@@ -99,7 +99,7 @@ class SNAPADC(object):
 		self.adc.init()
 
 		logging.info("Configuring ADC interleaving mode")
-		self.setInterleavingMode(numChannel,clockDivide=4/numChannel)
+		self.setInterleavingMode(numChannel, 1)
 
 		if not self.getWord('ADC16_LOCKED'):
 			logging.error('MMCM not locked.')
@@ -711,18 +711,26 @@ class SNAPADC(object):
 			logging.error('Frame clock NOT aligned.\n{0}'.format(str(errs)))
 			return False
 
-
 	def batchTest(self):
-        	configs  = zip(range(150, 250),[4]*100)
-        	configs += zip(range(400, 500),[2]*100)
-        	configs += zip(range(900,1000),[1]*100)
+		configs  = zip(range(150, 250),[4]*100)
+		configs += zip(range(400, 500),[2]*100)
+		configs += zip(range(900,1000),[1]*100)
+		for i in range(1000):
+			freq = random.randint(100000,1000000)/1000.0
+			if freq <= 250:
+				nChannel = 4
+			elif freq <= 500:
+				nChannel = 2
+			elif freq <= 1000:
+				nChannel = 1
+			configs += [(freq,nChannel)]
 		stats = {}
-	        for freq,nChannel in configs:
-	                print("Testing frequency {0} and nChannel {1}".format(freq,nChannel))
-	                ret =  self.init(freq,nChannel)
+		for freq,nChannel in configs:
+			print("Testing frequency {0} and nChannel {1}".format(freq,nChannel))
+			ret =  self.init(freq,nChannel)
 			if ret != self.SUCCESS:
-	                        print("Failed on {0}".format(freq))
-			stats[(freq,nChannel)]=ret
-	                self.bitslip()
+				print("Failed on {0}".format(freq))
+			stats[freq]=ret
+			self.bitslip()
 
 		return stats

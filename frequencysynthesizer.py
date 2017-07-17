@@ -194,7 +194,9 @@ class LMX2581(WishBoneDevice):
 		# f_out = f_osc * (PLL_N + PLL_NUM/PLL_DEN) / VCO_DIV
 		
 		# Get a good VCO_DIV. The minimum VCO frequency is 1800.
-		vco_min = 1800; vco_max = 3800
+		# Though the min frequency is 1800, but mostly LMX2581 doesn't get
+		# locked at this frequency. Change 1800 to 1900
+		vco_min = 1900; vco_max = 3800
 		if synth_mhz > vco_min and synth_mhz < vco_max:
 			# Bypass VCO_DIV by properly setting OUTA_MUX and OUTB_MUX
 			VCO_DIV = None
@@ -203,7 +205,7 @@ class LMX2581(WishBoneDevice):
 			VCO_DIV = vco_guess + vco_guess%2
 		
 		# Get PLLN, PLL_NUM, and PLL_DEN
-		pll = (1 if VCO_DIV is None else VCO_DIV) * synth_mhz / ref_signal
+		pll = float(1 if VCO_DIV is None else VCO_DIV) * synth_mhz / ref_signal
 		PLL_N = int(pll)
 		frac = pll - PLL_N
 		if frac < 1.0/(1<<22): # smallest fraction on the synth
