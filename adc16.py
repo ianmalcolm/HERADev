@@ -54,7 +54,7 @@ class SNAPADC(object):
 	ERROR_FRAME = 4
 	ERROR_RAMP = 5
 
-	def __init__(self, interface, resolution=8,defaultDelayTap=0):
+	def __init__(self, interface, ADC='HMCAD1511', defaultDelayTap=0):
 		# interface => corr.katcp_wrapper.FpgaClient('10.1.0.23')
 
 		self.A_WB_R_LIST = [self.WB_DICT.index(a) for a in self.WB_DICT if a != None]
@@ -68,20 +68,21 @@ class SNAPADC(object):
 		self.clksw = HMC922(interface,'adc16_use_synth')
 		self.ram = [WishBoneDevice(interface,name) for name in self.ramList]
 
-		self.RESOLUTION = resolution
-		if self.RESOLUTION == 8:
+		if ADC not in ['HMCAD1511','HMCAD1520']:
+			raise ValueError("Invalid parameter")
+
+		if ADC == 'HMCAD1511':
 			self.adc = HMCAD1511(interface,'adc16_controller')
-		# Not supported yet
-		# else:	# 12, 14 or 16
-		# 	self.adc = HMCAD1520(interface,'adc16_controller')
+		else:	# 'HMCAD1520'
+			self.adc = HMCAD1520(interface,'adc16_controller')
 
 
-	def init(self, samplingRate=250, numChannel=4): 
-
-		self.selectADC()
+	def init(self, samplingRate=250, numChannel=4, resolution=None):
 
 		logging.info("Reseting adc_unit")
 		self.reset()
+
+		self.selectADC()
 
 		logging.info("Reseting frequency synthesizer")
 		self.lmx.init()
@@ -98,8 +99,32 @@ class SNAPADC(object):
 		logging.info("Initialising ADCs")
 		self.adc.init()
 
-		logging.info("Configuring ADC interleaving mode")
-		self.setInterleavingMode(numChannel, 1)
+		if resolution==None:
+			if isinstance(self.adc, HMCAD1511):
+				self.RESOLUTION=8
+			else:	# isinstance(self.adc, HMCAD1520):
+				self.RESOLUTION=12
+		elif resolution not in [8,12,14,None]:
+			raise ValueError("Invalid parameter")
+
+		if numChannel==1 and samplingRate<240:
+			lowClkFreq = True
+		elif numChannel==2 and samplingRate<120:
+			lowClkFreq = True
+		elif numChannel==4 and samplingRate<60:
+			lowClkFreq = True
+		elif numChannel==4 and self.RESOLUTION==14 and samplingRate<30:
+			lowClkFreq = True
+		else:
+			lowClkFreq = False
+
+		logging.info("Configuring ADC operating mode")
+		if isinstance(self.adc, HMCAD1511):
+			self.adc.setOperatingMode(numChannel,1,lowClkFreq)
+		elif isinstance(self.adc, HMCAD1520):
+			self.adc.setOperatingMode(numChannel,1,lowClkFreq,resolution)
+
+		self.setDemux()
 
 		if not self.getWord('ADC16_LOCKED'):
 			logging.error('MMCM not locked.')
@@ -107,11 +132,12 @@ class SNAPADC(object):
 
 		if not self.alignLineClock():
 			return self.ERROR_LINE
-		if not self.alignFrameClock(numChannel):
+		if not self.alignFrameClock():
 			return self.ERROR_FRAME
 
 		errs = self.testPatterns(taps=None,mode='ramp')
 		if not np.all(np.array([adc.values() for adc in errs.values()])==0):
+			logging.error('ADCs failed on ramp test.')
 			return self.ERROR_RAMP
 
 		return self.SUCCESS
@@ -137,13 +163,21 @@ class SNAPADC(object):
 		else:
 			raise ValueError("Invalid parameter")
 
-	def setInterleavingMode(self, numChannel, clockDivide=1):
-		if numChannel not in [1, 2, 4]:
+	def setDemux(self, mode=2):
+		"""
+
+		when mode==0:
+			data = data[:,[0,4,1,5,2,6,3,7]]
+		when mode==1:
+			data = data[:,[0,1,4,5,2,3,6,7]]
+		when mode==2
+			data = data[:,[0,1,2,3,4,5,6,7]]
+		"""
+		if mode not in [0,1,2]:
 			raise ValueError("Invalid parameter")
-		val = self._set(0x0, int(math.log(numChannel,2)),	self.M_WB_W_DEMUX_MODE)
-		val = self._set(val, 0b1,				self.M_WB_W_DEMUX_WRITE)
+		val = self._set(0x0, mode,	self.M_WB_W_DEMUX_MODE)
+		val = self._set(val, 0b1,	self.M_WB_W_DEMUX_WRITE)
 		self.adc._write(val, self.A_WB_W_CTRL)
-		self.adc.interleavingMode(numChannel, clockDivide)
 
 	def reset(self):
 		""" Reset all adc16_interface logics inside FPGA """
@@ -202,39 +236,10 @@ class SNAPADC(object):
 		else:
 			return rid[0]
 
-	def interleaving(self,data,mode,channelization=False):
+	def interleave(self,data,mode):
 		""" Reorder the data according to the interleaving mode
 		"""
-
-		if not isinstance(data,np.ndarray):
-			raise ValueError("Invalid parameter")
-		if mode not in [1,2,4]:
-			raise ValueError("Invalid parameter")
-
-		if channelization not in [True,False]:
-			raise ValueError("Invalid parameter")
-
-		if mode==1:
-			data = data[:,[0,4,1,5,2,6,3,7]]
-		elif mode==2:
-			data = data[:,[0,1,4,5,2,3,6,7]]
-		# elifmode==4: do nothing
-
-		if channelization:
-			if mode==1:
-				data = data.reshape(-1,1)
-			elif mode==2:
-				data = data.reshape(-1,2,4)
-				data = np.einsum('ijk->jik',data)
-				data = data.reshape(2,-1)
-				data = np.einsum('ij->ji',data)
-			elif mode==4:
-				data = data.reshape(-1,4,2)
-				data = np.einsum('ijk->jik',data)
-				data = data.reshape(4,-1)
-				data = np.einsum('ij->ji',data)
-		return data
-			
+		return self.adc.interleave(data, mode)
 
 	def readRAM(self, ram=None):
 		""" Read RAM(s) and return the 1024-sample data
@@ -385,7 +390,7 @@ class SNAPADC(object):
 				self.curDelay[cs][ls] = tap
 
 
-	def testPatterns(self, chipSel=None, taps=True, mode='std', interleaving=4, pattern1=None, pattern2=None):
+	def testPatterns(self, chipSel=None, taps=True, mode='std', pattern1=None, pattern2=None):
 		""" Return a list of avg/std/err for a given tap or a list of taps
 
 		Return the lane-wise standard deviation/error of the data at the output
@@ -394,7 +399,6 @@ class SNAPADC(object):
 		the given pattern, while err mode with dual test patterns guess the counts of the 
 		mismatches. 'guess' because both patterns could comes up at first. This method
 		always returns the smaller counts.
-		This method works when aligning line clock even if you omit interleaving setting
 
 		E.g.
 			testPatterns()		# Return lane-wise std of all ADCs, taps=range(32)
@@ -510,8 +514,7 @@ class SNAPADC(object):
 
 		results = []
 
-		def _check(data,_itlv=4):
-			data = self.interleaving(data,_itlv)
+		def _check(data):
 	                d = np.array(data).reshape(-1, 8)
 	                if mode=='std' and pattern2==None:	# std mode, single pattern
 	                        r = np.std(d,0)
@@ -535,7 +538,7 @@ class SNAPADC(object):
 
 		if taps == None:
 			self.snapshot()
-			results = [_check(self.readRAM(cs),interleaving) for cs in chipSel]
+			results = [_check(self.readRAM(cs)) for cs in chipSel]
 			results = np.array(results).reshape(len(chipSel),len(self.laneList)).tolist()
 			results = dict(zip(chipSel,results))
 			for cs in chipSel:
@@ -544,7 +547,7 @@ class SNAPADC(object):
 			for tap in taps:
 				self.delay(tap, chipSel)
 				self.snapshot()
-				results += [_check(self.readRAM(cs),interleaving) for cs in chipSel]
+				results += [_check(self.readRAM(cs)) for cs in chipSel]
 			results = np.array(results).reshape(-1,len(chipSel),len(self.laneList))
 			results = np.einsum('ijk->jik',results).tolist()
 			results = dict(zip(chipSel,results))
@@ -676,7 +679,7 @@ class SNAPADC(object):
 			logging.error('Line clock NOT aligned.\n{0}'.format(str(errs)))
 			return False
 
-	def alignFrameClock(self, interleaving=4):
+	def alignFrameClock(self):
 		""" Align the frame clock with data frame
 		"""
 
@@ -688,7 +691,7 @@ class SNAPADC(object):
 
 		for u in range(self.RESOLUTION*2):
 			allDone = True
-			errs = self.testPatterns(taps=None,mode='err',interleaving=interleaving,pattern1=p1,pattern2=p2)
+			errs = self.testPatterns(taps=None,mode='err',pattern1=p1,pattern2=p2)
 			for adc in self.adcList:
 				for lane in self.laneList:
 					if errs[adc][lane]!=0:
@@ -698,12 +701,7 @@ class SNAPADC(object):
 				break;
 
 		# Check if frame clock aligned
-		pats = [0b10101010,0b01010101,0b00000000,0b11111111]
-		mask = (1<<(self.RESOLUTION/2))-1
-		ofst = self.RESOLUTION/2
-		p1 = ((pats[0] & mask) << ofst) + (pats[3] & mask)
-		p2 = ((pats[1] & mask) << ofst) + (pats[2] & mask)
-		errs = self.testPatterns(taps=None,mode='err',interleaving=interleaving,pattern1=p1,pattern2=p2)
+		errs = self.testPatterns(taps=None,mode='err',pattern1=p1,pattern2=p2)
 		if all(all(val==0 for val in adc.values()) for adc in errs.values()):
 			logging.info('Frame clock of all ADCs aligned.')
 			return True
@@ -711,26 +709,3 @@ class SNAPADC(object):
 			logging.error('Frame clock NOT aligned.\n{0}'.format(str(errs)))
 			return False
 
-	def batchTest(self):
-		configs  = zip(range(150, 250),[4]*100)
-		configs += zip(range(400, 500),[2]*100)
-		configs += zip(range(900,1000),[1]*100)
-		for i in range(1000):
-			freq = random.randint(100000,1000000)/1000.0
-			if freq <= 250:
-				nChannel = 4
-			elif freq <= 500:
-				nChannel = 2
-			elif freq <= 1000:
-				nChannel = 1
-			configs += [(freq,nChannel)]
-		stats = {}
-		for freq,nChannel in configs:
-			print("Testing frequency {0} and nChannel {1}".format(freq,nChannel))
-			ret =  self.init(freq,nChannel)
-			if ret != self.SUCCESS:
-				print("Failed on {0}".format(freq))
-			stats[freq]=ret
-			self.bitslip()
-
-		return stats
