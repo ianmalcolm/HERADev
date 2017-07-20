@@ -88,7 +88,7 @@ class SNAPADC(object):
 		self.lmx.init()
 
 		logging.info("Configuring frequency synthesizer")
-		self.lmx.setFreq(1.0 * samplingRate / (4 / numChannel))
+		self.lmx.setFreq(samplingRate)
 
 		if not self.lmx.getDiagnoses('LD_PINSTATE'):
 			return self.ERROR_LMX

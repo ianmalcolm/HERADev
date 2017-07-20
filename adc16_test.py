@@ -1,5 +1,7 @@
 import numpy as np
 import numbers
+import matplotlib.pyplot as plt
+import random
 
 # Before running the testing methods, please prepare the parameter "snap" with the recipe below:
 # Apply modification on line 171 of https://github.com/ianmalcolm/mlib_devel/commit/6a48ef8289672364836598f385378a3338817f3b#diff-e9c4a7eb227bd864f7d96900f1813164R171
@@ -12,7 +14,7 @@ import numbers
 
 # These test methods work on https://github.com/ianmalcolm/mlib_devel/tree/high_resolution_adc as well
 
-def clockAlignmentTest(snap,freqs):
+def clockAlignmentTest(snap,freqs=None):
 	""" Stress test on line clock and frame clock alignment
 
 	Make an instance of SNAPADC and pass it along with a list of frequencies to this method
@@ -20,12 +22,12 @@ def clockAlignmentTest(snap,freqs):
 	The return of this method "stats" is a 2-column numpy array. The 1st column is the
 	frequency and the 2nd column indicates success of failure. 0 means a complete success.
 	
-        SUCCESS = 0
-        ERROR_LMX = 1
-        ERROR_MMCM = 2
-        ERROR_LINE = 3
-        ERROR_FRAME = 4
-        ERROR_RAMP = 5
+	SUCCESS = 0
+	ERROR_LMX = 1
+	ERROR_MMCM = 2
+	ERROR_LINE = 3
+	ERROR_FRAME = 4
+	ERROR_RAMP = 5
 
 	"""
 
@@ -37,10 +39,10 @@ def clockAlignmentTest(snap,freqs):
 	## configuring IDELAYE2 and ISERDESE2 inside of FPGA
 	## Testing under dual pattern and ramp mode
 
-	# Example on generating test frequencies
-	# freqs = range(60, 1001, 10)	# integer frequencies
-	# for i in range(1000):
-	# 	freqs += [random.randint(60000,1000000)/1000.0] # fractional frequencies
+	if freqs==None:
+		freqs = range(60, 1001, 10)	# integer frequencies
+		for i in range(1000):
+			freqs += [random.randint(60000,1000000)/1000.0] # fractional frequencies
 
 	stats = np.empty((0,2))
 
@@ -149,3 +151,55 @@ def realSignal(snap):
 #	snap.selectADC()	# optional: Select all ADCs
 #	snap.snapshot()
 #	r=snap.readRAM()
+
+def plot(snap,data,mode,resolution=8,impedance=50):
+	""" Plot a snapshot in dbm
+	"""
+
+	data = snap.adc.interleave(data,mode)
+
+	stride = 2.0 / (2**(resolution)-1)
+	data = data * stride - 1;				# Voltage
+	data = 10 * np.log10((data ** 2) / impedance * 1000)	# dbm
+
+	label = ['channel'+str(i) for i in range(1,data.shape[1]+1)]
+	t = range(data.shape[0])
+	hplt = plt.plot(t,data)
+	plt.legend(hplt,label)
+	plt.xlabel('Time')
+	plt.ylabel('Power (dbm)')
+	plt.show()
+
+
+def freqSyntTest(lmx,freqs=None):
+	""" Sweep frequency from 60MHz to 1000MHz
+
+	Return failed frequencies
+	"""
+
+	# lmx = LMX2581(fpga,'lmx_ctrl')
+
+	lmx.init()
+
+	stats = np.empty((0,1))
+
+	if freqs==None:
+		freqs = range(60, 1001)		# integer frequencies
+		for i in range(1000):
+			freqs += [random.randint(60000,1000000)/1000.0] # fractional frequencies
+
+	# check parameters
+	if not isinstance(freqs,list):
+		raise ValueError("Invalid parameter")
+	elif not all(isinstance(freq,numbers.Number) for freq in freqs):
+		raise ValueError("Invalid parameter")
+	elif not all(freq>=60 and freq<=1000 for freq in freqs):
+		raise ValueError("Invalid parameter")
+
+	for freq in freqs:
+		print("Testing lmx on frequency {0}".format(freq))
+		if not lmx.setFreq(freq):
+			print("\tlmx failed on frequency {0}".format(freq))
+			stats = np.append(stats,[freq])
+
+	return stats
