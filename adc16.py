@@ -135,7 +135,7 @@ class SNAPADC(object):
 		if not self.alignFrameClock():
 			return self.ERROR_FRAME
 
-		errs = self.testPatterns(taps=None,mode='ramp')
+		errs = self.testPatterns(mode='ramp')
 		if not np.all(np.array([adc.values() for adc in errs.values()])==0):
 			logging.error('ADCs failed on ramp test.')
 			return self.ERROR_RAMP
@@ -170,7 +170,7 @@ class SNAPADC(object):
 			data = data[:,[0,4,1,5,2,6,3,7]]
 		when mode==1:
 			data = data[:,[0,1,4,5,2,3,6,7]]
-		when mode==2
+		when mode==2:
 			data = data[:,[0,1,2,3,4,5,6,7]]
 		"""
 		if mode not in [0,1,2]:
@@ -390,7 +390,7 @@ class SNAPADC(object):
 				self.curDelay[cs][ls] = tap
 
 
-	def testPatterns(self, chipSel=None, taps=True, mode='std', pattern1=None, pattern2=None):
+	def testPatterns(self, chipSel=None, taps=None, mode='std', pattern1=None, pattern2=None):
 		""" Return a list of avg/std/err for a given tap or a list of taps
 
 		Return the lane-wise standard deviation/error of the data at the output
@@ -401,21 +401,20 @@ class SNAPADC(object):
 		always returns the smaller counts.
 
 		E.g.
-			testPatterns()		# Return lane-wise std of all ADCs, taps=range(32)
-			testPatterns(0)		# Return lane-wise std of the 1st
-						# ADC with taps = range(32)
+			testPatterns(taps=True)	# Return lane-wise std of all ADCs, taps=range(32)
+			testPatterns(0,taps=range(32))
+						# Return lane-wise std of the 1st ADC
 			testPatterns([0,1],2)	# Return lane-wise std of the first two ADCs 
 						# with tap = 2
 			testPatterns(1, taps=[0,2,3], mode='std')
 						# Return lane-wise stds of the 2nd ADC with
 						# three different tap settings
-			testPatterns(2, taps=None, mode='err', pattern1=0b10101010)
+			testPatterns(2, mode='err', pattern1=0b10101010)
 						# Check the actual data against the given test
 						# pattern without changing current delay tap
 						# setting and return lane-wise error counts of
 						# the 3rd ADC,
-			testPatterns(2, taps=None, mode='err', pattern1=0b10101010,
-								pattern2=0b01010101)
+			testPatterns(2, mode='err', pattern1=0b10101010, pattern2=0b01010101)
 						# Check the actual data against the given alternate
 						# test pattern without changing current delay tap
 						# setting and return lane-wise error counts of
@@ -490,8 +489,9 @@ class SNAPADC(object):
 			raise ValueError("Invalid parameter")
 
 		self.selectADC(chipSel)
-		if mode==MODE[2]:		# ramp mode
+		if mode=='ramp':		# ramp mode
 			self.adc.test('en_ramp')
+			taps=None
 			pattern1=None
 			pattern2=None
 		elif pattern1==None and pattern2==None:
@@ -590,7 +590,6 @@ class SNAPADC(object):
 		data = np.sum(data,1)
 
 		if all(d != 0 for d in data):
-			logging.error("Cannot find a proper delay")
 			return False
 			
 		dist=np.zeros(data.shape)
@@ -626,27 +625,31 @@ class SNAPADC(object):
 			
 		taps = []
 
-		if mode == MODE[0]:
+		if mode == 'lane_wise_single_pat':
 			# Decide lane-wise delay tap under single pattern test mode
-			stds = self.testPatterns()	# Sweep tap settings and get std
+			stds = self.testPatterns(taps=True)	# Sweep tap settings and get std
 			for adc in self.adcList:
 				for lane in self.laneList:
 					vals = np.array(stds[adc].values())[:,lane]
 					t = self.decideDelay(vals)	# Find a proper tap setting 
-					self.delay(t,adc,lane)		# Apply the tap setting
+					if not t:
+						logging.error("ADC{0} lane{1} delay decision failed".format(adc,lane))
+					else:
+						self.delay(t,adc,lane)	# Apply the tap setting
 
-		elif mode == MODE[1]:
+		elif mode == 'chip_wise_single_pat':
 			# This method would give all lanes of an ADC the same delay tap setting
 			# decide chip-wise delay tap under single pattern test mode
-			stds = self.testPatterns()	# Sweep tap settings and get std
+			stds = self.testPatterns(taps=True)	# Sweep tap settings and get std
 			for adc in self.adcList:
 				vals = np.array(stds[adc].values())
 				t = self.decideDelay(vals)	# Find a proper tap setting 
 				if not t:
-					break
-				self.delay(t,adc)		# Apply the tap setting
+					logging.error("ADC{0} delay decision failed".format(adc))
+				else:
+					self.delay(t,adc)	# Apply the tap setting
 
-		elif mode == MODE[2]:	# dual_pat
+		elif mode == 'dual_pat':	# dual_pat
 			# Fine tune delay tap under dual pattern test mode
 			# p1 = 0b1010101010101010 & (2**self.RESOLUTION-1)
 			# p2 = 0b0101010101010101 & (2**self.RESOLUTION-1)
@@ -657,13 +660,16 @@ class SNAPADC(object):
 			p1 = ((pats[0] & mask) << ofst) + (pats[3] & mask)
 			p2 = ((pats[1] & mask) << ofst) + (pats[2] & mask)
 
-			errs = self.testPatterns(mode='std',pattern1=p1,pattern2=p2)
+			errs = self.testPatterns(taps=True,mode='std',pattern1=p1,pattern2=p2)
 
 			for adc in self.adcList:
 				for lane in self.laneList:
 					vals = np.array(errs[adc].values())[:,lane]
 					t = self.decideDelay(vals)	# Find a proper tap setting 
-					self.delay(t,adc,lane)		# Apply the tap setting
+					if not t:
+						logging.error("ADC{0} lane{1} delay decision failed".format(adc,lane))
+					else:
+						self.delay(t,adc,lane)	# Apply the tap setting
 
 		# Check if line clock aligned
 		pats = [0b10101010,0b01010101,0b00000000,0b11111111]
@@ -671,7 +677,7 @@ class SNAPADC(object):
 		ofst = self.RESOLUTION/2
 		p1 = ((pats[0] & mask) << ofst) + (pats[3] & mask)
 		p2 = ((pats[1] & mask) << ofst) + (pats[2] & mask)
-		errs = self.testPatterns(taps=None,mode='std',pattern1=p1,pattern2=p2)
+		errs = self.testPatterns(mode='std',pattern1=p1,pattern2=p2)
 		if np.all(np.array([adc.values() for adc in errs.values()])==0):
 			logging.info('Line clock of all ADCs aligned.')
 			return True
@@ -691,7 +697,7 @@ class SNAPADC(object):
 
 		for u in range(self.RESOLUTION*2):
 			allDone = True
-			errs = self.testPatterns(taps=None,mode='err',pattern1=p1,pattern2=p2)
+			errs = self.testPatterns(mode='err',pattern1=p1,pattern2=p2)
 			for adc in self.adcList:
 				for lane in self.laneList:
 					if errs[adc][lane]!=0:
@@ -701,7 +707,7 @@ class SNAPADC(object):
 				break;
 
 		# Check if frame clock aligned
-		errs = self.testPatterns(taps=None,mode='err',pattern1=p1,pattern2=p2)
+		errs = self.testPatterns(mode='err',pattern1=p1,pattern2=p2)
 		if all(all(val==0 for val in adc.values()) for adc in errs.values()):
 			logging.info('Frame clock of all ADCs aligned.')
 			return True

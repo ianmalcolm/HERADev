@@ -3,17 +3,6 @@ import numbers
 import matplotlib.pyplot as plt
 import random
 
-# Before running the testing methods, please prepare the parameter "snap" with the recipe below:
-# Apply modification on line 171 of https://github.com/ianmalcolm/mlib_devel/commit/6a48ef8289672364836598f385378a3338817f3b#diff-e9c4a7eb227bd864f7d96900f1813164R171
-# Download https://github.com/domagalski/roach-adc-tutorial/blob/master/fpga/snap_adc.slx and build it
-# With a SNAP+RPI platform, download bitstream and run following code:
-# import ......
-# fpga=corr.katcp_wrapper.FpgaClient('10.1.0.23')
-# fpga.progdev('snap_adc_2017-07-19_1136.bof')
-# snap=adc16.SNAPADC(fpga)
-
-# These test methods work on https://github.com/ianmalcolm/mlib_devel/tree/high_resolution_adc as well
-
 def clockAlignmentTest(snap,freqs=None):
 	""" Stress test on line clock and frame clock alignment
 
