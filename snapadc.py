@@ -107,6 +107,12 @@ class SNAPADC(object):
 
 		"""
 
+		if resolution not in [8,12,14,None]:
+			raise ValueError("Invalid parameter")
+
+		if resolution>8 and samplingRate/(4/numChannel)>160:
+			raise ValueError("Invalid parameter")
+
 		if resolution==None:
 			if type(self.adc) is HMCAD1511:
 				self.RESOLUTION=8
@@ -114,10 +120,8 @@ class SNAPADC(object):
 				self.RESOLUTION=8
 			else:
 				self.RESOLUTION=12
-		elif resolution not in [8,12,14,None]:
-			raise ValueError("Invalid parameter")
-		elif resolution>8 and samplingRate/(4/numChannel)>160:
-			raise ValueError("Invalid parameter")
+		else:
+			self.RESOLUTION=resolution
 
 		logging.info("Reseting adc_unit")
 		self.reset()
@@ -295,9 +299,11 @@ class SNAPADC(object):
 		elif ram in self.adcList:				# read one RAM		
 			if self.RESOLUTION>8:		# ADC_DATA_WIDTH == 16
 				fmt = '!1024h'
+				length = 2048
 			else:				# ADC_DATA_WIDTH == 8
 				fmt = '!1024b'
-			vals = self.ram[ram]._read(addr=0, size=1024)
+				length = 1024
+			vals = self.ram[ram]._read(addr=0, size=length)
 			vals = np.array(struct.unpack(fmt,vals)).reshape(-1,8)
 
 			return vals
